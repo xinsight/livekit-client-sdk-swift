@@ -31,9 +31,9 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     }
 
     private let request: URLRequest
-    private let urlSession: URLSession
-    private let task: URLSessionWebSocketTask
-    private let stream: WebSocketStream
+    private var urlSession: URLSession!
+    private var task: URLSessionWebSocketTask!
+    private var stream: WebSocketStream!
 
     private static func makeURLSession(delegate: URLSessionWebSocketDelegate) -> URLSession {
         #if targetEnvironment(simulator)
