@@ -31,8 +31,11 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     }
 
     private let request: URLRequest
+    private let urlSession: URLSession
+    private let task: URLSessionWebSocketTask
+    private let stream: WebSocketStream
 
-    private lazy var urlSession: URLSession = {
+    private static func makeURLSession(delegate: URLSessionWebSocketDelegate) -> URLSession {
         #if targetEnvironment(simulator)
         if #available(iOS 26.0, *) {
             nw_tls_create_options()
@@ -48,19 +51,10 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         /// https://developer.apple.com/documentation/foundation/urlsessionconfiguration/improving_network_reliability_using_multipath_tcp
         config.multipathServiceType = .handover
         #endif
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }()
-
-    private lazy var task: URLSessionWebSocketTask = urlSession.webSocketTask(with: request)
-
-    private lazy var stream: WebSocketStream = WebSocketStream { continuation in
-        _state.mutate { state in
-            state.streamContinuation = continuation
-        }
-        waitForNextValue()
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
-    init(url: URL, token: String, connectOptions: ConnectOptions?) async throws {
+    init(url: URL, token: String, connectOptions: ConnectOptions?) {
         // Prepare the request
         var request = URLRequest(url: url,
                                  cachePolicy: .useProtocolCachePolicy,
@@ -70,7 +64,18 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         self.request = request
 
         super.init()
+        urlSession = Self.makeURLSession(delegate: self)
+        task = urlSession.webSocketTask(with: request)
+        stream = WebSocketStream { [weak self] continuation in
+            guard let self else { return }
+            _state.mutate { state in
+                state.streamContinuation = continuation
+            }
+            waitForNextValue()
+        }
+    }
 
+    func connect() async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 _state.mutate { state in
