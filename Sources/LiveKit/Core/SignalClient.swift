@@ -144,6 +144,7 @@ actor SignalClient: Loggable {
                                    token: token,
                                    connectOptions: connectOptions)
             try await socket.connect()
+            socket.setupStream()
 
             let messageLoopTask = socket.subscribe(self) { observer, message in
                 await observer.onWebSocketMessage(message)

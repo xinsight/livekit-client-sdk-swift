@@ -33,7 +33,7 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     private let request: URLRequest
     private var urlSession: URLSession!
     private var task: URLSessionWebSocketTask!
-    private var stream: WebSocketStream!
+    private var stream: WebSocketStream?
 
     private static func makeURLSession(delegate: URLSessionWebSocketDelegate) -> URLSession {
         #if targetEnvironment(simulator)
@@ -66,6 +66,9 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         super.init()
         urlSession = Self.makeURLSession(delegate: self)
         task = urlSession.webSocketTask(with: request)
+    }
+
+    func setupStream() {
         stream = WebSocketStream { [weak self] continuation in
             guard let self else { return }
             _state.mutate { state in
@@ -108,7 +111,12 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     // MARK: - AsyncSequence
 
     func makeAsyncIterator() -> AsyncIterator {
-        stream.makeAsyncIterator()
+        guard let stream else {
+            return WebSocketStream { continuation in
+                continuation.finish(throwing: LiveKitError(.invalidState, message: "WebSocket stream not initialized"))
+            }.makeAsyncIterator()
+        }
+        return stream.makeAsyncIterator()
     }
 
     private func waitForNextValue() {
