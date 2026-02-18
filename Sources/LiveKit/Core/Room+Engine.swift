@@ -249,16 +249,24 @@ public enum StartReconnectReason: Sendable {
 extension Room {
     // full connect sequence, doesn't update connection state
     func fullConnectSequence(_ url: URL, _ token: String) async throws {
-        let connectResponse = try await signalClient.connect(url,
-                                                             token,
-                                                             connectOptions: _state.connectOptions,
-                                                             reconnectMode: _state.isReconnectingWithMode,
-                                                             adaptiveStream: _state.roomOptions.adaptiveStream)
-        // Check cancellation after WebSocket connected
-        try Task.checkCancellation()
+        log("JJJ [fullConnectSequence] connect start")
+        do {
+            let connectResponse = try await signalClient.connect(url,
+                                                                 token,
+                                                                 connectOptions: _state.connectOptions,
+                                                                 reconnectMode: _state.isReconnectingWithMode,
+                                                                 adaptiveStream: _state.roomOptions.adaptiveStream)
+            log("JJJ [fullConnectSequence] connect end")
+            // Check cancellation after WebSocket connected
+            try Task.checkCancellation()
 
-        _state.mutate { $0.connectStopwatch.split(label: "signal") }
-        try await configureTransports(connectResponse: connectResponse)
+            _state.mutate { $0.connectStopwatch.split(label: "signal") }
+            try await configureTransports(connectResponse: connectResponse)
+
+        } catch {
+            log("JJJ [fullConnectSequence] catch error: \(error) (rethrow)")
+            throw error
+        }
         // Check cancellation after configuring transports
         try Task.checkCancellation()
 
