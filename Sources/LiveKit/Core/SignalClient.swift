@@ -144,9 +144,11 @@ actor SignalClient: Loggable {
                                    token: token,
                                    connectOptions: connectOptions)
             try await socket.connect()
-            socket.setupStream()
+            try await socket.setupStream()
+            let stream = try await socket.streamSequence()
+            _state.mutate { $0.socket = socket }
 
-            let messageLoopTask = socket.subscribe(self) { observer, message in
+            let messageLoopTask = stream.subscribe(self) { observer, message in
                 await observer.onWebSocketMessage(message)
             } onFailure: { observer, error in
                 await observer.cleanUp(withError: error)
@@ -159,7 +161,6 @@ actor SignalClient: Loggable {
 
             // Successfully connected
             _state.mutate {
-                $0.socket = socket
                 $0.connectionState = .connected
             }
 
@@ -217,11 +218,15 @@ actor SignalClient: Loggable {
         _pingIntervalTimer.cancel()
         _pingTimeoutTimer.cancel()
 
-        _state.mutate {
+        let socketToClose = _state.mutate {
+            let socketToClose = $0.socket
             $0.messageLoopTask = nil
-            $0.socket?.close()
             $0.socket = nil
             $0.lastJoinResponse = nil
+            return socketToClose
+        }
+        if let socketToClose {
+            await socketToClose.close()
         }
 
         _connectResponseCompleter.reset()

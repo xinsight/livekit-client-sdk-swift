@@ -19,21 +19,40 @@ import Network
 
 typealias WebSocketStream = AsyncThrowingStream<URLSessionWebSocketTask.Message, Error>
 
-final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, URLSessionWebSocketDelegate {
-    typealias AsyncIterator = WebSocketStream.Iterator
-    typealias Element = URLSessionWebSocketTask.Message
+private final class WebSocketDelegateProxy: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    weak var owner: WebSocket?
 
-    private let _state = StateSync(State())
-
-    private struct State {
-        var streamContinuation: WebSocketStream.Continuation?
-        var connectContinuation: CheckedContinuation<Void, Error>?
-        var receiveTask: Task<Void, Never>?
+    func urlSession(_: URLSession, webSocketTask _: URLSessionWebSocketTask, didOpenWithProtocol _: String?) {
+        Task { [weak self] in
+            await self?.owner?.onDidOpenFromDelegate()
+        }
     }
 
-    private let request: URLRequest
-    private var urlSession: URLSession!
-    private var task: URLSessionWebSocketTask!
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        Task { [weak self] in
+            await self?.owner?.onDidCompleteFromDelegate(withError: error)
+        }
+    }
+}
+
+actor WebSocket: Loggable {
+    private enum Lifecycle {
+        case idle
+        case connecting
+        case connected
+        case streaming
+        case closing
+        case closed
+    }
+
+    private let delegateProxy: WebSocketDelegateProxy
+    private let urlSession: URLSession
+    private let task: URLSessionWebSocketTask
+
+    private var lifecycle: Lifecycle = .idle
+    private var connectContinuation: CheckedContinuation<Void, Error>?
+    private var streamContinuation: WebSocketStream.Continuation?
+    private var receiveTask: Task<Void, Never>?
     private var stream: WebSocketStream?
 
     private static func makeURLSession(delegate: URLSessionWebSocketDelegate) -> URLSession {
@@ -45,13 +64,11 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
-        // explicitly set timeout intervals
         config.timeoutIntervalForRequest = TimeInterval(60)
         config.timeoutIntervalForResource = TimeInterval(604_800)
         config.shouldUseExtendedBackgroundIdleMode = true
         config.networkServiceType = .callSignaling
         #if os(iOS) || os(visionOS)
-        /// https://developer.apple.com/documentation/foundation/urlsessionconfiguration/improving_network_reliability_using_multipath_tcp
         config.multipathServiceType = .handover
         #endif
         return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
@@ -62,77 +79,100 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
                                  cachePolicy: .reloadIgnoringLocalCacheData,
                                  timeoutInterval: connectOptions?.socketConnectTimeoutInterval ?? .defaultSocketConnect)
         request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        self.request = request
 
-        super.init()
-        urlSession = Self.makeURLSession(delegate: self)
-        task = urlSession.webSocketTask(with: request)
+        let delegateProxy = WebSocketDelegateProxy()
+        let urlSession = Self.makeURLSession(delegate: delegateProxy)
+        let task = urlSession.webSocketTask(with: request)
+
+        self.delegateProxy = delegateProxy
+        self.urlSession = urlSession
+        self.task = task
+
+        delegateProxy.owner = self
     }
 
     func connect() async throws {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                _state.mutate { state in
-                    state.connectContinuation = continuation
+        guard lifecycle == .idle else {
+            throw LiveKitError(.invalidState, message: "WebSocket is not idle")
+        }
+
+        lifecycle = .connecting
+        let localTask = task
+        let localSession = urlSession
+
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    connectContinuation = continuation
+                    localTask.resume()
                 }
-                task.resume()
+            } onCancel: {
+                localTask.cancel(with: .normalClosure, reason: nil)
+                localSession.finishTasksAndInvalidate()
             }
-        } onCancel: {
-            close()
+        } catch {
+            if lifecycle == .connecting {
+                lifecycle = .idle
+            }
+            throw error
         }
     }
 
-    func setupStream() {
+    func setupStream() throws {
+        guard lifecycle == .connected || lifecycle == .streaming else {
+            throw LiveKitError(.invalidState, message: "WebSocket must be connected before setting up stream")
+        }
         guard stream == nil else { return }
+
         stream = WebSocketStream { [weak self] continuation in
-            guard let self else { return }
-            _state.mutate { state in
-                state.streamContinuation = continuation
+            Task { [weak self] in
+                await self?.onStreamReady(continuation)
             }
-            startReceiveLoopIfNeeded()
         }
+        lifecycle = .streaming
     }
 
-    deinit {
-        close()
+    func streamSequence() throws -> WebSocketStream {
+        guard let stream else {
+            throw LiveKitError(.invalidState, message: "WebSocket stream not initialized")
+        }
+        return stream
     }
 
     func close() {
+        guard lifecycle != .closed, lifecycle != .closing else { return }
+        lifecycle = .closing
+
+        connectContinuation?.resume(throwing: LiveKitError(.cancelled))
+        connectContinuation = nil
+        streamContinuation?.finish(throwing: LiveKitError(.cancelled))
+        streamContinuation = nil
+        receiveTask?.cancel()
+        receiveTask = nil
+
         task.cancel(with: .normalClosure, reason: nil)
         urlSession.finishTasksAndInvalidate()
-
-        let (connectContinuation, streamContinuation, receiveTask) = _state.mutate { state in
-            let connectContinuation = state.connectContinuation
-            let streamContinuation = state.streamContinuation
-            let receiveTask = state.receiveTask
-            state.connectContinuation = nil
-            state.streamContinuation = nil
-            state.receiveTask = nil
-            return (connectContinuation, streamContinuation, receiveTask)
-        }
-
-        receiveTask?.cancel()
-        connectContinuation?.resume(throwing: LiveKitError(.cancelled))
-        streamContinuation?.finish(throwing: LiveKitError(.cancelled))
+        lifecycle = .closed
     }
 
-    // MARK: - AsyncSequence
-
-    func makeAsyncIterator() -> AsyncIterator {
-        guard let stream else {
-            return WebSocketStream { continuation in
-                continuation.finish(throwing: LiveKitError(.invalidState, message: "WebSocket stream not initialized"))
-            }.makeAsyncIterator()
+    func send(data: Data) async throws {
+        guard lifecycle == .connected || lifecycle == .streaming else {
+            throw LiveKitError(.invalidState, message: "WebSocket is not connected")
         }
-        return stream.makeAsyncIterator()
+
+        let message = URLSessionWebSocketTask.Message.data(data)
+        try await task.send(message)
+    }
+
+    private func onStreamReady(_ continuation: WebSocketStream.Continuation) {
+        streamContinuation = continuation
+        startReceiveLoopIfNeeded()
     }
 
     private func startReceiveLoopIfNeeded() {
-        _state.mutate { state in
-            guard state.receiveTask == nil else { return }
-            state.receiveTask = Task { [weak self] in
-                await self?.receiveLoop()
-            }
+        guard receiveTask == nil else { return }
+        receiveTask = Task { [weak self] in
+            await self?.receiveLoop()
         }
     }
 
@@ -140,67 +180,50 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         while task.closeCode == .invalid, !Task.isCancelled {
             do {
                 let message = try await task.receive()
-
-                guard let continuation = _state.read({ $0.streamContinuation }) else {
-                    _state.mutate { $0.receiveTask = nil }
-                    return
-                }
+                guard let continuation = streamContinuation else { break }
                 continuation.yield(message)
             } catch {
                 let lkError = LiveKitError.from(error: error) ?? LiveKitError(.unknown)
-                let continuation = _state.mutate { state in
-                    let continuation = state.streamContinuation
-                    state.streamContinuation = nil
-                    state.receiveTask = nil
-                    return continuation
-                }
-                continuation?.finish(throwing: lkError)
+                streamContinuation?.finish(throwing: lkError)
+                streamContinuation = nil
+                receiveTask = nil
                 return
             }
         }
 
-        _state.mutate { $0.receiveTask = nil }
+        receiveTask = nil
     }
 
-    // MARK: - Send
+    fileprivate func onDidOpenFromDelegate() {
+        guard lifecycle == .connecting else { return }
 
-    func send(data: Data) async throws {
-        let message = URLSessionWebSocketTask.Message.data(data)
-        try await task.send(message)
+        lifecycle = .connected
+        connectContinuation?.resume()
+        connectContinuation = nil
     }
 
-    // MARK: - URLSessionWebSocketDelegate
-
-    func urlSession(_: URLSession, webSocketTask _: URLSessionWebSocketTask, didOpenWithProtocol _: String?) {
-        let continuation = _state.mutate { state in
-            let continuation = state.connectContinuation
-            state.connectContinuation = nil
-            return continuation
-        }
-        continuation?.resume()
-    }
-
-    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+    fileprivate func onDidCompleteFromDelegate(withError error: Error?) {
         log("didCompleteWithError: \(String(describing: error))", error != nil ? .error : .debug)
 
-        let (connectContinuation, streamContinuation, receiveTask, lkError) = _state.mutate { state in
-            let connectContinuation = state.connectContinuation
-            let streamContinuation = state.streamContinuation
-            let receiveTask = state.receiveTask
-            let lkError = error.map { LiveKitError.from(error: $0) ?? LiveKitError(.unknown) }
-            state.connectContinuation = nil
-            state.streamContinuation = nil
-            state.receiveTask = nil
-            return (connectContinuation, streamContinuation, receiveTask, lkError)
+        receiveTask?.cancel()
+        receiveTask = nil
+
+        let lkError = error.map { LiveKitError.from(error: $0) ?? LiveKitError(.unknown) }
+        if let connectContinuation {
+            if let lkError {
+                connectContinuation.resume(throwing: lkError)
+            } else {
+                connectContinuation.resume(throwing: LiveKitError(.network, message: "WebSocket completed before opening"))
+            }
+            self.connectContinuation = nil
         }
 
-        receiveTask?.cancel()
         if let lkError {
-            connectContinuation?.resume(throwing: lkError)
             streamContinuation?.finish(throwing: lkError)
         } else {
-            connectContinuation?.resume()
             streamContinuation?.finish()
         }
+        streamContinuation = nil
+        lifecycle = .closed
     }
 }
