@@ -76,7 +76,9 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
                 _state.mutate { state in
                     state.connectContinuation = continuation
                 }
+                log("WebSocket: task to be created and resumed")
                 task.resume()
+                log("WebSocket: task: \(task.debugDescription)")
             }
         } onCancel: {
             // Cancel(reset) when Task gets cancelled
