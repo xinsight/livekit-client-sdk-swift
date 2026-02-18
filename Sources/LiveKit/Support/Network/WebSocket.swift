@@ -149,6 +149,57 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         }
     }
 
+    func urlSession(_: URLSession,
+                    task: URLSessionTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void)
+    {
+        defer { completionHandler(.allow) }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            log("WebSocket handshake response is not HTTPURLResponse, taskState: \(task.state.rawValue)", .warning)
+            return
+        }
+
+        let connectionHeader = Self.headerValue("Connection", in: httpResponse.allHeaderFields) ?? "-"
+        let upgradeHeader = Self.headerValue("Upgrade", in: httpResponse.allHeaderFields) ?? "-"
+        let acceptHeader = Self.headerValue("Sec-WebSocket-Accept", in: httpResponse.allHeaderFields) ?? "-"
+        let subProtocolHeader = Self.headerValue("Sec-WebSocket-Protocol", in: httpResponse.allHeaderFields) ?? "-"
+        let closeCode = (task as? URLSessionWebSocketTask)?.closeCode.rawValue ?? URLSessionWebSocketTask.CloseCode.invalid.rawValue
+
+        log("""
+            WebSocket handshake didReceive response \
+            status: \(httpResponse.statusCode), \
+            taskState: \(task.state.rawValue), \
+            closeCode: \(closeCode), \
+            Connection: \(connectionHeader), \
+            Upgrade: \(upgradeHeader), \
+            Sec-WebSocket-Accept: \(acceptHeader), \
+            Sec-WebSocket-Protocol: \(subProtocolHeader)
+            """)
+    }
+
+    func urlSession(_: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard let transaction = metrics.transactionMetrics.last else {
+            log("WebSocket metrics collected with no transaction metrics")
+            return
+        }
+
+        log("""
+            WebSocket metrics \
+            taskState: \(task.state.rawValue), \
+            protocol: \(transaction.networkProtocolName ?? "-"), \
+            proxy: \(transaction.isProxyConnection), \
+            reusedConnection: \(transaction.isReusedConnection), \
+            fetchStart: \(String(describing: transaction.fetchStartDate)), \
+            connectStart: \(String(describing: transaction.connectStartDate)), \
+            connectEnd: \(String(describing: transaction.connectEndDate)), \
+            requestStart: \(String(describing: transaction.requestStartDate)), \
+            responseStart: \(String(describing: transaction.responseStartDate)), \
+            responseEnd: \(String(describing: transaction.responseEndDate))
+            """)
+    }
+
     func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
         log("didCompleteWithError: \(String(describing: error))", error != nil ? .error : .debug)
 
@@ -165,5 +216,10 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
             state.connectContinuation = nil
             state.streamContinuation = nil
         }
+    }
+
+    private static func headerValue(_ key: String, in headers: [AnyHashable: Any]) -> String? {
+        headers.first { String(describing: $0.key).caseInsensitiveCompare(key) == .orderedSame }
+            .map { String(describing: $0.value) }
     }
 }
