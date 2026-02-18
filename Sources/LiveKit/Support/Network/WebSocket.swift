@@ -149,45 +149,37 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         }
     }
 
-    func urlSession(_: URLSession,
-                    task: URLSessionTask,
-                    didReceive response: URLResponse,
-                    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void)
-    {
-        defer { completionHandler(.allow) }
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            log("WebSocket handshake response is not HTTPURLResponse, taskState: \(task.state.rawValue)", .warning)
-            return
-        }
-
-        let connectionHeader = Self.headerValue("Connection", in: httpResponse.allHeaderFields) ?? "-"
-        let upgradeHeader = Self.headerValue("Upgrade", in: httpResponse.allHeaderFields) ?? "-"
-        let acceptHeader = Self.headerValue("Sec-WebSocket-Accept", in: httpResponse.allHeaderFields) ?? "-"
-        let subProtocolHeader = Self.headerValue("Sec-WebSocket-Protocol", in: httpResponse.allHeaderFields) ?? "-"
-        let closeCode = (task as? URLSessionWebSocketTask)?.closeCode.rawValue ?? URLSessionWebSocketTask.CloseCode.invalid.rawValue
-
-        log("""
-            WebSocket handshake didReceive response \
-            status: \(httpResponse.statusCode), \
-            taskState: \(task.state.rawValue), \
-            closeCode: \(closeCode), \
-            Connection: \(connectionHeader), \
-            Upgrade: \(upgradeHeader), \
-            Sec-WebSocket-Accept: \(acceptHeader), \
-            Sec-WebSocket-Protocol: \(subProtocolHeader)
-            """)
-    }
-
     func urlSession(_: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
         guard let transaction = metrics.transactionMetrics.last else {
             log("WebSocket metrics collected with no transaction metrics")
             return
         }
 
+        let responseHeaders: [AnyHashable: Any]
+        let responseStatus: Int
+        if let httpResponse = transaction.response as? HTTPURLResponse {
+            responseHeaders = httpResponse.allHeaderFields
+            responseStatus = httpResponse.statusCode
+        } else {
+            responseHeaders = [:]
+            responseStatus = -1
+        }
+
+        let connectionHeader = Self.headerValue("Connection", in: responseHeaders) ?? "-"
+        let upgradeHeader = Self.headerValue("Upgrade", in: responseHeaders) ?? "-"
+        let acceptHeader = Self.headerValue("Sec-WebSocket-Accept", in: responseHeaders) ?? "-"
+        let subProtocolHeader = Self.headerValue("Sec-WebSocket-Protocol", in: responseHeaders) ?? "-"
+        let closeCode = (task as? URLSessionWebSocketTask)?.closeCode.rawValue ?? URLSessionWebSocketTask.CloseCode.invalid.rawValue
+
         log("""
             WebSocket metrics \
+            responseStatus: \(responseStatus), \
             taskState: \(task.state.rawValue), \
+            closeCode: \(closeCode), \
+            Connection: \(connectionHeader), \
+            Upgrade: \(upgradeHeader), \
+            Sec-WebSocket-Accept: \(acceptHeader), \
+            Sec-WebSocket-Protocol: \(subProtocolHeader), \
             protocol: \(transaction.networkProtocolName ?? "-"), \
             proxy: \(transaction.isProxyConnection), \
             reusedConnection: \(transaction.isReusedConnection), \
