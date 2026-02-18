@@ -140,9 +140,11 @@ actor SignalClient: Loggable {
         _state.mutate { $0.connectionState = (isReconnect ? .reconnecting : .connecting) }
 
         do {
-            let socket = try await WebSocket(url: url,
-                                             token: token,
-                                             connectOptions: connectOptions)
+            let socket = WebSocket(url: url,
+                                   token: token,
+                                   connectOptions: connectOptions)
+            try await socket.connect()
+            socket.setupStream()
 
             let messageLoopTask = socket.subscribe(self) { observer, message in
                 await observer.onWebSocketMessage(message)
