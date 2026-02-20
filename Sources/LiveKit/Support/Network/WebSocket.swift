@@ -76,21 +76,27 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
                 _state.mutate { state in
                     state.connectContinuation = continuation
                 }
+                log("JJJ WebSocket.init - resume()")
                 task.resume()
             }
         } onCancel: {
+            log("JJJ WebSocket.init - task completion handler: onCancel")
             // Cancel(reset) when Task gets cancelled
             close()
         }
     }
 
     deinit {
+        log("JJJ deinit")
         close()
     }
 
     func close() {
+        log("JJJ close")
         task.cancel(with: .normalClosure, reason: nil)
+        log("JJJ task cancelled")
         urlSession.finishTasksAndInvalidate()
+        log("JJJ task finished/invalidated")
 
         _state.mutate { state in
             state.connectContinuation?.resume(throwing: LiveKitError(.cancelled))
@@ -107,6 +113,7 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     }
 
     private func waitForNextValue() {
+        log("JJJ waitForNextValue")
         guard task.closeCode == .invalid else {
             _state.mutate { state in
                 state.streamContinuation?.finish(throwing: LiveKitError(.invalidState))
@@ -116,9 +123,11 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
         }
 
         task.receive(completionHandler: { [weak self] result in
+            self?.log("JJJ receive completion: \(result)")
             guard let self, let continuation = _state.streamContinuation else {
                 return
             }
+            self.log("JJJ has stream continuation: \(continuation)")
 
             do {
                 let message = try result.get()
@@ -136,13 +145,15 @@ final class WebSocket: NSObject, @unchecked Sendable, Loggable, AsyncSequence, U
     // MARK: - Send
 
     func send(data: Data) async throws {
+        log("JJJ send: \(data)")
         let message = URLSessionWebSocketTask.Message.data(data)
         try await task.send(message)
     }
 
     // MARK: - URLSessionWebSocketDelegate
 
-    func urlSession(_: URLSession, webSocketTask _: URLSessionWebSocketTask, didOpenWithProtocol _: String?) {
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol name: String?) {
+        log("JJJ urlSession session: \(session) task: \(task) protocol: \(name ?? "-")")
         _state.mutate { state in
             state.connectContinuation?.resume()
             state.connectContinuation = nil

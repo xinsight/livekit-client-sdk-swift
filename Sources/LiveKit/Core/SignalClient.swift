@@ -240,6 +240,7 @@ actor SignalClient: Loggable {
 private extension SignalClient {
     // Send request or enqueue while reconnecting
     func _sendRequest(_ request: Livekit_SignalRequest) async throws {
+        log("JJJ _sendRequest: \(request)")
         guard connectionState != .disconnected else {
             log("connectionState is .disconnected", .error)
             throw LiveKitError(.invalidState, message: "connectionState is .disconnected")
