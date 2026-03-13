@@ -73,7 +73,7 @@ extension Room {
         {
             // Did complete a full reconnect
             log("Re-publishing local tracks...")
-            Task.detached { [weak self] in
+            Task { [weak self] in
                 guard let self else { return }
                 do {
                     try await localParticipant.republishAllTracks()

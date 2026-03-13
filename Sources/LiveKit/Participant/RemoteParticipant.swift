@@ -63,7 +63,8 @@ public class RemoteParticipant: Participant, @unchecked Sendable {
             .compactMap { $0 as? RemoteTrackPublication }
 
         for unpublishRemoteTrackPublication in unpublishRemoteTrackPublications {
-            Task.detached {
+            Task { [weak self] in
+                guard let self else { return }
                 do {
                     try await self.unpublish(publication: unpublishRemoteTrackPublication)
                 } catch {

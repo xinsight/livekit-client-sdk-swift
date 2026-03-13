@@ -189,7 +189,8 @@ extension TrackPublication: TrackDelegateInternal {
     public func track(_: Track, didUpdateIsMuted isMuted: Bool, shouldSendSignal: Bool) {
         log("isMuted: \(isMuted) shouldSendSignal: \(shouldSendSignal)")
 
-        Task.detached {
+        Task { [weak self] in
+            guard let self else { return }
             let participant = try await self.requireParticipant()
             let room = try participant.requireRoom()
 

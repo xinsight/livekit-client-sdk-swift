@@ -638,7 +638,8 @@ extension Room: AppStateDelegate {
 
         guard !cameraVideoTracks.isEmpty else { return }
 
-        Task.detached {
+        Task { [weak self] in
+            guard let self else { return }
             for cameraVideoTrack in cameraVideoTracks {
                 do {
                     try await cameraVideoTrack.suspend()
@@ -654,7 +655,8 @@ extension Room: AppStateDelegate {
 
         guard !cameraVideoTracks.isEmpty else { return }
 
-        Task.detached {
+        Task { [weak self] in
+            guard let self else { return }
             for cameraVideoTrack in cameraVideoTracks {
                 do {
                     try await cameraVideoTrack.resume()
@@ -668,14 +670,14 @@ extension Room: AppStateDelegate {
     func appWillTerminate() {
         // attempt to disconnect if already connected.
         // this is not guranteed since there is no reliable way to detect app termination.
-        Task.detached {
-            await self.disconnect()
+        Task { [weak self] in
+            await self?.disconnect()
         }
     }
 
     func appWillSleep() {
-        Task.detached {
-            await self.disconnect()
+        Task { [weak self] in
+            await self?.disconnect()
         }
     }
 

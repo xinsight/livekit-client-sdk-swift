@@ -460,7 +460,7 @@ private extension Room {
     func _republishLocalTracks() {
         // Republish all local tracks to the new room
         log("Re-publishing local tracks after room move...")
-        Task.detached { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             do {
                 try await localParticipant.republishAllTracks()

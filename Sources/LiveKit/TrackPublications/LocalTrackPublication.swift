@@ -95,7 +95,8 @@ extension LocalTrackPublication {
 
 extension LocalTrackPublication: VideoCapturerDelegate {
     public func capturer(_: VideoCapturer, didUpdate _: Dimensions?) {
-        Task.detached {
+        Task { [weak self] in
+            guard let self else { return }
             await self._debounce.schedule {
                 self.recomputeSenderParameters()
             }

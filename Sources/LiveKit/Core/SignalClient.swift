@@ -275,14 +275,12 @@ private extension SignalClient {
             return
         }
 
-        Task.detached {
-            let alwaysProcess = switch response.message {
-            case .join, .reconnect, .leave: true
-            default: false
-            }
-            // Always process join or reconnect messages even if suspended...
-            await self._responseQueue.processIfResumed(response, or: alwaysProcess)
+        let alwaysProcess = switch response.message {
+        case .join, .reconnect, .leave: true
+        default: false
         }
+        // Always process join or reconnect messages even if suspended...
+        await _responseQueue.processIfResumed(response, or: alwaysProcess)
     }
 
     // swiftlint:disable:next cyclomatic_complexity function_body_length
