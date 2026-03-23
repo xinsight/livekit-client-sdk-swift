@@ -360,6 +360,13 @@ extension Room: SignalClientDelegate {
         do {
             let publisher = try requirePublisher()
             try await publisher.set(remoteDescription: answer, offerId: offerId)
+        } catch let nsError as NSError
+            where nsError.domain == "org.webrtc.RTC_OBJC_TYPE(RTCPeerConnection)" &&
+            (nsError.localizedDescription.contains("Called in wrong state: stable") ||
+                nsError.localizedDescription.contains("Failed to set remote answer sdp"))
+        {
+            // Expected when an older/duplicate answer arrives after negotiation has already settled.
+            log("Ignoring stale answer for offerId: \(offerId), error: \(nsError)", .debug)
         } catch {
             log("Failed to set remote description with offerId: \(offerId), error: \(error)", .error)
         }

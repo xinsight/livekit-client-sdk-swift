@@ -64,6 +64,15 @@ actor SignalClient: Loggable {
     private lazy var _requestQueue = QueueActor<Livekit_SignalRequest>(onProcess: { [weak self] request in
         assertNotMainThread("SignalClient._requestQueue.onProcess")
         guard let self else { return }
+        guard _state.connectionState != .disconnected else {
+            log("Dropping queued request \(request) while disconnected", .debug)
+            return
+        }
+        guard _state.socket != nil else {
+            // Cleanup/reconnect race: queue can still drain while socket is being replaced.
+            log("Dropping queued request \(request) because socket is nil", .debug)
+            return
+        }
 
         do {
             // Prepare request data...
@@ -78,6 +87,9 @@ actor SignalClient: Loggable {
         } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 57 {
             // Expected race while socket is being torn down during reconnect/cleanup.
             log("Dropping queued request \(request) after socket close: \(error)", .debug)
+        } catch let error as NSError where error.domain == "io.livekit.swift-sdk" && error.code == LiveKitErrorType.invalidState.rawValue {
+            // Bridge path for LiveKitError.invalidState (e.g. "WebSocket is nil").
+            log("Dropping queued request \(request) due to signaling state: \(error)", .debug)
         } catch let error as LiveKitError where error.type == .invalidState {
             // Expected when queue drains while transitioning between signaling states.
             log("Dropping queued request \(request) due to signaling state: \(error)", .debug)
