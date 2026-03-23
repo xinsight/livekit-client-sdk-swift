@@ -283,7 +283,8 @@ private extension SignalClient {
     // Send request or enqueue while reconnecting
     func _sendRequest(_ request: Livekit_SignalRequest) async throws {
         guard connectionState != .disconnected else {
-            log("connectionState is .disconnected", .error)
+            // Expected during teardown/reconnect races; caller may already be handling this path.
+            log("connectionState is .disconnected", .debug)
             throw LiveKitError(.invalidState, message: "connectionState is .disconnected")
         }
 

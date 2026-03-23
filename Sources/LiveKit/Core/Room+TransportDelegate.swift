@@ -91,6 +91,11 @@ extension Room: TransportDelegate {
             } catch let error as LiveKitError where error.type == .invalidState {
                 // Expected when signaling disconnects during negotiation.
                 log("Dropping ICE candidate due to signaling state: \(error)", .debug)
+            } catch let error as NSError
+                where error.domain == "io.livekit.swift-sdk" && error.code == LiveKitErrorType.invalidState.rawValue
+            {
+                // Bridge path for LiveKitError.invalidState from ObjC/NSError boundaries.
+                log("Dropping ICE candidate due to signaling state: \(error)", .debug)
             } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 57 {
                 // Expected socket-closed race during reconnect/cleanup.
                 log("Dropping ICE candidate after socket close: \(error)", .debug)
