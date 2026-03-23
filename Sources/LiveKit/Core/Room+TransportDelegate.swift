@@ -18,6 +18,11 @@ import Foundation
 
 internal import LiveKitWebRTC
 
+@inline(__always)
+private func assertNotMainThread(_ context: String) {
+    dispatchPrecondition(condition: .notOnQueue(.main))
+}
+
 extension LKRTCPeerConnectionState {
     var isConnected: Bool {
         self == .connected
@@ -30,6 +35,7 @@ extension LKRTCPeerConnectionState {
 
 extension Room: TransportDelegate {
     func transport(_ transport: Transport, didUpdateState pcState: LKRTCPeerConnectionState) {
+        assertNotMainThread("Room.transport.didUpdateState")
         log("target: \(transport.target), connectionState: \(pcState.description)")
 
         // primary connected
@@ -54,6 +60,7 @@ extension Room: TransportDelegate {
             // Attempt re-connect if primary or publisher transport failed
             if transport.isPrimary || (_state.hasPublished && transport.target == .publisher), pcState.isDisconnected {
                 Task {
+                    assertNotMainThread("Room.transport.didUpdateState.startReconnectTask")
                     do {
                         try await startReconnect(reason: .transport)
                     } catch {
@@ -66,6 +73,7 @@ extension Room: TransportDelegate {
 
     func transport(_ transport: Transport, didGenerateIceCandidate iceCandidate: IceCandidate) {
         Task {
+            assertNotMainThread("Room.transport.didGenerateIceCandidate.task")
             guard _state.connectionState != .disconnected else {
                 log("Dropping ICE candidate while room is disconnected", .debug)
                 return
@@ -106,6 +114,7 @@ extension Room: TransportDelegate {
             { [weak self] in
                 guard let self else { return }
                 Task {
+                    assertNotMainThread("Room.transport.didAddTrack.task")
                     await self.engine(self, didAddTrack: track, rtpReceiver: rtpReceiver, stream: streams.first!)
                 }
             }
@@ -115,6 +124,7 @@ extension Room: TransportDelegate {
     func transport(_ transport: Transport, didRemoveTrack track: LKRTCMediaStreamTrack) {
         if transport.target == .subscriber {
             Task {
+                assertNotMainThread("Room.transport.didRemoveTrack.task")
                 await engine(self, didRemoveTrack: track)
             }
         }

@@ -20,6 +20,11 @@ import Foundation
 
 internal import LiveKitWebRTC
 
+@inline(__always)
+private func assertNotMainThread(_ context: String) {
+    dispatchPrecondition(condition: .notOnQueue(.main))
+}
+
 actor SignalClient: Loggable {
     // MARK: - Types
 
@@ -57,6 +62,7 @@ actor SignalClient: Loggable {
 
     // Queue to store requests while reconnecting
     private lazy var _requestQueue = QueueActor<Livekit_SignalRequest>(onProcess: { [weak self] request in
+        assertNotMainThread("SignalClient._requestQueue.onProcess")
         guard let self else { return }
 
         do {
@@ -81,6 +87,7 @@ actor SignalClient: Loggable {
     })
 
     private lazy var _responseQueue = QueueActor<Livekit_SignalResponse>(onProcess: { [weak self] response in
+        assertNotMainThread("SignalClient._responseQueue.onProcess")
         guard let self else { return }
 
         await _process(signalResponse: response)
@@ -151,8 +158,10 @@ actor SignalClient: Loggable {
                                              connectOptions: connectOptions)
 
             let messageLoopTask = socket.subscribe(self) { observer, message in
+                assertNotMainThread("SignalClient.socket.subscribe.onElement")
                 await observer.onWebSocketMessage(message)
             } onFailure: { observer, error in
+                assertNotMainThread("SignalClient.socket.subscribe.onFailure")
                 await observer.cleanUp(withError: error)
             }
             _state.mutate { $0.messageLoopTask = messageLoopTask }
@@ -270,6 +279,7 @@ private extension SignalClient {
     }
 
     func onWebSocketMessage(_ message: URLSessionWebSocketTask.Message) async {
+        assertNotMainThread("SignalClient.onWebSocketMessage")
         let response: Livekit_SignalResponse? = switch message {
         case let .data(data): try? Livekit_SignalResponse(serializedBytes: data)
         case let .string(string): try? Livekit_SignalResponse(jsonString: string)
