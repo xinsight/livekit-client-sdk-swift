@@ -28,6 +28,7 @@ final class AsyncTimer: Sendable, Loggable {
         var interval: TimeInterval
         var task: AnyTaskCancellable?
         var block: TimerBlock?
+        var generation: UInt64 = 0
     }
 
     let _state: StateSync<State>
@@ -37,16 +38,15 @@ final class AsyncTimer: Sendable, Loggable {
     }
 
     deinit {
-        _state.mutate {
-            $0.isStarted = false
-            $0.task?.cancel()
-        }
+        cancel()
     }
 
     func cancel() {
         _state.mutate {
             $0.isStarted = false
             $0.task?.cancel()
+            $0.task = nil
+            $0.generation &+= 1
         }
     }
 
@@ -64,29 +64,39 @@ final class AsyncTimer: Sendable, Loggable {
         }
     }
 
-    private func scheduleNextInvocation() async {
+    private func scheduleNextInvocation(for generation: UInt64) async {
         let state = _state.copy()
-        guard state.isStarted else { return }
+        guard state.isStarted, state.generation == generation else { return }
         let task = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(state.interval * 1_000_000_000))
-            if !state.isStarted || Task.isCancelled { return }
+            if Task.isCancelled { return }
+            let shouldRun = self._state.read { $0.isStarted && $0.generation == generation }
+            if !shouldRun { return }
             do {
                 try await state.block?()
             } catch {
                 log("Error in timer block: \(error)", .error)
             }
-            await scheduleNextInvocation()
+            await scheduleNextInvocation(for: generation)
         }.cancellable()
-        _state.mutate { $0.task = task }
+        _state.mutate {
+            if $0.isStarted, $0.generation == generation {
+                $0.task = task
+            } else {
+                task.cancel()
+            }
+        }
     }
 
     func restart() {
-        _state.mutate {
+        let generation = _state.mutate {
             $0.task?.cancel()
             $0.isStarted = true
+            $0.generation &+= 1
+            return $0.generation
         }
 
-        Task { await scheduleNextInvocation() }
+        Task { await scheduleNextInvocation(for: generation) }
     }
 }

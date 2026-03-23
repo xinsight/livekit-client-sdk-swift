@@ -58,6 +58,33 @@ public extension LocalParticipant {
         do {
             return try await withThrowingTimeout(timeout: responseTimeout) {
                 try await withCheckedThrowingContinuation { continuation in
+                    let didResume = StateSync(false)
+                    let resumeOnce: @Sendable (Result<String, Error>) -> Void = { result in
+                        let shouldResume = didResume.mutate {
+                            guard !$0 else { return false }
+                            $0 = true
+                            return true
+                        }
+
+                        guard shouldResume else { return }
+
+                        switch result {
+                        case let .success(payload):
+                            continuation.resume(returning: payload)
+                        case let .failure(error):
+                            continuation.resume(throwing: error)
+                        }
+                    }
+
+                    let ackTimeoutTask = Task {
+                        try await Task.sleep(nanoseconds: UInt64(maxRoundTripLatency * 1_000_000_000))
+
+                        if await room.rpcState.hasPendingAck(requestId) {
+                            await room.rpcState.removeAllPending(requestId)
+                            resumeOnce(.failure(RpcError.builtIn(.connectionTimeout)))
+                        }
+                    }
+
                     Task {
                         await room.rpcState.addPendingAck(requestId)
 
@@ -65,26 +92,18 @@ public extension LocalParticipant {
                             participantIdentity: destinationIdentity,
                             onResolve: { payload, error in
                                 Task {
+                                    ackTimeoutTask.cancel()
                                     await room.rpcState.removePendingAck(requestId)
                                     await room.rpcState.removePendingResponse(requestId)
 
                                     if let error {
-                                        continuation.resume(throwing: error)
+                                        resumeOnce(.failure(error))
                                     } else {
-                                        continuation.resume(returning: payload ?? "")
+                                        resumeOnce(.success(payload ?? ""))
                                     }
                                 }
                             }
                         ))
-                    }
-
-                    Task {
-                        try await Task.sleep(nanoseconds: UInt64(maxRoundTripLatency * 1_000_000_000))
-
-                        if await room.rpcState.hasPendingAck(requestId) {
-                            await room.rpcState.removeAllPending(requestId)
-                            continuation.resume(throwing: RpcError.builtIn(.connectionTimeout))
-                        }
                     }
                 }
             }

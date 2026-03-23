@@ -19,8 +19,15 @@ import Foundation
 
 @objcMembers
 public class LocalTrackPublication: TrackPublication, @unchecked Sendable {
-    // indicates whether the track was suspended(muted) by the SDK
-    var _suspended: Bool = false
+    private enum SuspensionState {
+        case active
+        case suspending
+        case suspended
+        case resuming
+    }
+
+    // Indicates whether the track is suspended (muted) by the SDK.
+    private let _suspensionState = StateSync<SuspensionState>(.active)
 
     // stream state is always active for local tracks
     override public var streamState: StreamState { .active }
@@ -81,15 +88,41 @@ extension LocalTrackPublication {
     func suspend() async throws {
         // Do nothing if already muted
         guard !isMuted else { return }
-        try await mute()
-        _suspended = true
+
+        let shouldSuspend = _suspensionState.mutate {
+            guard $0 == .active else { return false }
+            $0 = .suspending
+            return true
+        }
+
+        guard shouldSuspend else { return }
+
+        do {
+            try await mute()
+            _suspensionState.mutate { $0 = .suspended }
+        } catch {
+            _suspensionState.mutate { $0 = .active }
+            throw error
+        }
     }
 
     func resume() async throws {
         // Do nothing if was not suspended
-        guard _suspended else { return }
-        try await unmute()
-        _suspended = false
+        let shouldResume = _suspensionState.mutate {
+            guard $0 == .suspended else { return false }
+            $0 = .resuming
+            return true
+        }
+
+        guard shouldResume else { return }
+
+        do {
+            try await unmute()
+            _suspensionState.mutate { $0 = .active }
+        } catch {
+            _suspensionState.mutate { $0 = .suspended }
+            throw error
+        }
     }
 }
 
