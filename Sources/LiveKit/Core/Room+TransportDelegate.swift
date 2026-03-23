@@ -66,9 +66,26 @@ extension Room: TransportDelegate {
 
     func transport(_ transport: Transport, didGenerateIceCandidate iceCandidate: IceCandidate) {
         Task {
+            guard _state.connectionState != .disconnected else {
+                log("Dropping ICE candidate while room is disconnected", .debug)
+                return
+            }
+
+            let signalState = await signalClient.connectionState
+            guard signalState != .disconnected else {
+                log("Dropping ICE candidate while signal client is disconnected", .debug)
+                return
+            }
+
             do {
                 log("sending iceCandidate")
                 try await signalClient.sendCandidate(candidate: iceCandidate, target: transport.target)
+            } catch let error as LiveKitError where error.type == .invalidState {
+                // Expected when signaling disconnects during negotiation.
+                log("Dropping ICE candidate due to signaling state: \(error)", .debug)
+            } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 57 {
+                // Expected socket-closed race during reconnect/cleanup.
+                log("Dropping ICE candidate after socket close: \(error)", .debug)
             } catch {
                 log("Failed to send iceCandidate, error: \(error)", .error)
             }

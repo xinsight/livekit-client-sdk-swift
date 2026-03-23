@@ -113,7 +113,9 @@ actor Transport: NSObject, Loggable {
 
     func set(remoteDescription sd: LKRTCSessionDescription, offerId: UInt32) async throws {
         if signalingState != .haveLocalOffer {
-            log("Received answer with unexpected signaling state: \(signalingState), expected .haveLocalOffer", .warning)
+            let offerDescription = offerId == 0 ? "legacy offerId=0" : "offerId=\(offerId), latestOfferId=\(_latestOfferId)"
+            log("Ignoring answer with unexpected signaling state: \(signalingState), expected .haveLocalOffer (\(offerDescription))", .warning)
+            return
         }
 
         if offerId == 0 {

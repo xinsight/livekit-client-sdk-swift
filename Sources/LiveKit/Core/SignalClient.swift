@@ -69,6 +69,12 @@ actor SignalClient: Loggable {
             let webSocket = try await requireWebSocket()
             try await webSocket.send(data: data)
 
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == 57 {
+            // Expected race while socket is being torn down during reconnect/cleanup.
+            log("Dropping queued request \(request) after socket close: \(error)", .debug)
+        } catch let error as LiveKitError where error.type == .invalidState {
+            // Expected when queue drains while transitioning between signaling states.
+            log("Dropping queued request \(request) due to signaling state: \(error)", .debug)
         } catch {
             log("Failed to send queued request \(request) with error: \(error)", .warning)
         }
